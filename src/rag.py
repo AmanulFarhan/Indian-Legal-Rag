@@ -2,10 +2,12 @@ import os
 import time
 from pathlib import Path
 from typing import List, Dict
+import json
 
 import fitz
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
 
@@ -555,3 +557,87 @@ ANSWER:
         "answer": response.text,
         "sources": retrieved
     }
+
+def extract_document_text(file_path: str) -> str:
+    """
+    Extract text from a PDF document.
+    """
+    doc = fitz.open(file_path)
+
+    pages = []
+
+    for page_number, page in enumerate(doc, start=1):
+        text = page.get_text("text").strip()
+
+        if text:
+            pages.append(
+                f"\n--- Page {page_number} ---\n{text}"
+            )
+
+    doc.close()
+
+    return "\n".join(pages)
+
+
+def analyze_document(text: str):
+    prompt = f"""
+    You are an AI assistant for Indian legal awareness.
+
+    Analyze the following legal document.
+
+    Return ONLY valid JSON.
+    Do NOT use Markdown.
+    Do NOT wrap the JSON in ```json or ```.
+
+    Use exactly this schema:
+
+    {{
+    "document_type": "",
+    "concise_summary": "",
+    "parties_or_entities_mentioned": [],
+    "important_sections_or_clauses": [],
+    "key_obligations": [],
+    "important_dates": [],
+    "financial_terms": [],
+    "potentially_important_legal_points": []
+    }}
+
+    Rules:
+    - Use only information present in the document.
+    - Do not invent information.
+    - If information is unavailable, use "Not specified".
+    - Keep extracted facts separate from interpretation.
+    - This is general legal information, not professional legal advice.
+
+    DOCUMENT:
+    {text}
+    """
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            response = gemini_client().models.generate_content(
+                model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
+
+            return json.loads(response.text)
+
+        except Exception as e:
+            error_text = str(e)
+
+            if "503" not in error_text and "UNAVAILABLE" not in error_text:
+                raise
+
+            if attempt == max_retries - 1:
+                raise
+
+            wait_time = 2 ** attempt
+            print(
+                f"Gemini temporarily unavailable. "
+                f"Retrying in {wait_time} seconds..."
+            )
+            time.sleep(wait_time)
