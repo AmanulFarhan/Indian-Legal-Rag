@@ -1,316 +1,257 @@
-# Indian Legal RAG — Gemini Implementation
-
-A research prototype for answering questions about Indian law using Retrieval-Augmented Generation (RAG):
-
-Legal documents → cleaning and chunking → embeddings → Pinecone retrieval → context construction → Gemini → answer with sources.
-
-This repository focuses on the core RAG pipeline, with an interactive terminal interface and a FastAPI backend.
-
-## Current workflow
-
-In our current setup, legal PDFs were downloaded manually, processed locally, and converted into embeddings. These embeddings, together with document text and source metadata, are already stored in Pinecone.
-
-When a user asks a question, the application retrieves relevant passages from the existing Pinecone index and uses Gemini to generate an answer.
-
-There is no need to download the PDFs again or repeat ingestion before normal querying. An automatic PDF download script is not required for this workflow.
-
-The implementation uses:
-
-- **SentenceTransformer** for document and query embeddings.
-- **Pinecone** for vector storage and retrieval.
-- **Gemini** for answer generation.
-- **FastAPI** for the HTTP API.
-- **PyMuPDF** for PDF text extraction during ingestion.
-
-## Corpus
-
-The selected corpus sources include primary Indian legal documents:
-
-- Bharatiya Nyaya Sanhita, 2023
-- Bharatiya Nagarik Suraksha Sanhita, 2023
-- Bharatiya Sakshya Adhiniyam, 2023
-- Consumer Protection Act, 2019
-- Indian Contract Act, 1872
-- Right to Information Act, 2005
-- Constitution of India — optional
-
-See `data/SOURCES.md` for source references.
-
-The documents available for answering questions depend on what has actually been ingested into the configured Pinecone index.
-
-## 1. Setup
-
-Run commands from the repository root.
-
-If you already have a Conda environment, activate it and use that environment. Otherwise, create a Python virtual environment:
-
-```bash
-python -m venv .venv
-```
-
-Activate it on macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-Or in Windows Command Prompt:
-
-```bat
-.venv\Scripts\activate
-```
-
-Install dependencies:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Python-version compatibility with all pinned dependencies has not yet been verified.
-
-## 2. Configure Gemini and Pinecone
-
-Create a `.env` file in the repository root:
-
-```dotenv
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash
-PINECONE_API_KEY=your_pinecone_api_key
-PINECONE_INDEX=your_existing_index_name
-EMBEDDING_MODEL=the_sentence_transformer_model_used_for_ingestion
-TOP_K=5
-```
-
-Replace the placeholder values with your actual configuration.
-
-### Gemini configuration
-
-- `GEMINI_API_KEY`: your Gemini API key. The current code requires this variable when the module loads.
-- `GEMINI_MODEL`: the model used for answer generation.
-
-The current answer-generation code uses `gemini-2.5-flash` as its fallback. Confirm that the configured model is available to your account.
-
-Gemini generates answers from retrieved passages. Embeddings are generated separately using SentenceTransformer.
-
-### Pinecone configuration
-
-- `PINECONE_API_KEY`: a key with access to your Pinecone index.
-- `PINECONE_INDEX`: the name of your existing populated index.
-- `EMBEDDING_MODEL`: the SentenceTransformer model used to generate the stored document embeddings.
-- `TOP_K`: the default number of passages retrieved.
-
-Use the same embedding model for ingestion and querying. Matching vector dimensions alone is not enough if the models differ.
-
-For example, use:
-
-```dotenv
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-```
-
-only if that model was used for the existing document embeddings. This model produces 384-dimensional vectors.
-
-Set `EMBEDDING_MODEL` explicitly. The current code's fallback embedding identifier is inconsistent with its SentenceTransformer implementation.
-
-### Existing environment template
-
-The tracked `.env.example` still contains older provider settings. If you copy it, replace those settings with the Gemini variables shown above.
-
-Updating this README does not automatically update `.env.example`.
-
-Keep `.env` and API keys out of version control.
-
-## 3. Pinecone index and document preparation
-
-### Using the existing index
-
-Our legal PDFs have already been processed and stored in Pinecone.
-
-For normal querying:
-
-1. Configure access to the existing index.
-2. Set the same embedding model used during ingestion.
-3. Run the terminal interface or API.
-
-You do not need to create a new index, download PDFs again, or repeat ingestion.
-
-The index must contain the vectors and associated text/source metadata expected by the retrieval code.
-
-### Creating a fresh index
-
-For a new setup, create a Pinecone index compatible with your embedding model:
-
-- **Name:** set this through `PINECONE_INDEX`.
-- **Dimension:** match the embedding model's output dimension.
-- **Metric:** cosine.
-- **Cloud/region:** choose a supported configuration.
-
-A 384-dimensional index is appropriate for `sentence-transformers/all-MiniLM-L6-v2`; other models may require different dimensions.
-
-### Preparing new documents
-
-When preparing a fresh corpus or adding documents:
-
-1. Download the PDFs manually using the references in `data/SOURCES.md`.
-2. Place them in `data/raw/`.
-3. Configure the target Pinecone index and embedding model.
-4. Run ingestion as described below.
-
-No automatic corpus download script is required.
-
-## 4. Ingest — only when needed
-
-Skip this section when querying the existing populated index.
-
-To process local PDFs:
-
-```bash
-python src/ingest.py
-```
-
-The ingestion pipeline:
-
-1. Extracts PDF text with PyMuPDF.
-2. Normalizes whitespace.
-3. Splits text into overlapping chunks.
-4. Generates SentenceTransformer embeddings.
-5. Upserts vectors and metadata to Pinecone.
-
-If you change the embedding model, regenerate document embeddings in a compatible index. Do not mix incompatible embedding models in the same retrieval workflow.
-
-## 5. Query
-
-### Interactive terminal
-
-Run:
-
-```bash
-python src/query.py
-```
-
-Enter your question when prompted, for example:
+# Nyaya — Indian Legal RAG Assistant
+
+Nyaya is a multilingual legal-information assistant that implements the core
+Retrieval-Augmented Generation (RAG) approach from the assigned paper. It
+retrieves relevant passages from an indexed Indian legal corpus and asks Gemini
+to answer using that evidence. It also summarizes uploaded legal PDFs and
+answers questions grounded only in an uploaded document.
+
+The application provides general legal information and does not replace advice
+from a qualified legal professional.
+
+## Problem addressed
+
+Indian legal documents are long, technical, and difficult for readers without
+legal training. A general language model may provide fluent but unsupported
+answers. This project reduces that risk by retrieving legal text before answer
+generation and instructing the model to stay within the supplied evidence.
+
+## Implemented features
+
+- English and Malayalam legal questions.
+- Malayalam-to-English query translation for English-corpus retrieval.
+- Semantic search over multiple Indian legal documents in Pinecone.
+- Beginner-friendly answers with document and PDF-page sources.
+- PDF-only upload for structured legal-document summaries.
+- PDF plus question for document-grounded question answering.
+- Browser speech-to-text input in English or Malayalam.
+- React, Vite, and Tailwind interface with configurable language, retrieval
+  depth, and source visibility.
+
+## Core architecture
 
 ```text
-What is the right to information under Indian law?
+1. BUILD THE PERMANENT KNOWLEDGE BASE (one-time ingestion)
+
+Official legal PDFs
+        |
+        v
+Extract text page by page
+        |
+        v
+Clean text and preserve document/page metadata
+        |
+        v
+Create overlapping chunks
+        |
+        +--------------------------+
+        |                          |
+        v                          v
+Generate MiniLM embeddings    Attach source metadata
+        |                          |
+        +------------+-------------+
+                     v
+            Pinecone vector index
+
+
+2. ANSWER A KNOWLEDGE-BASE QUESTION
+
+English or Malayalam question
+        |
+        v
+Is the question Malayalam?
+    | Yes                     | No
+    v                         v
+Translate to English      Use original query
+    |                         |
+    +------------+------------+
+                 v
+        Generate query embedding
+                 |
+                 v
+Search Pinecone for similar legal chunks
+                 |
+                 v
+Build context from retrieved passages
+                 |
+                 +-----------------------------+
+                 |                             |
+                 v                             v
+       Original user question        Retrieved legal context
+                 |                             |
+                 +--------------+--------------+
+                                v
+                  Gemini grounded generation
+                                |
+                 +--------------+--------------+
+                 |                             |
+                 v                             v
+        Plain-language answer       Document names and PDF pages
+
+
+3. ANALYZE A NEWLY UPLOADED PDF
+
+Uploaded PDF
+      |
+      v
+Validate file and extract page-labelled text
+      |
+      v
+Was a question included?
+    | No                      | Yes
+    v                         v
+Create structured summary    Answer only from uploaded PDF
+    |                         |
+    +------------+------------+
+                 v
+      Conversational document result
 ```
 
-The current script accepts questions through an interactive prompt. It does not read a question supplied as a command-line argument.
+The first workflow runs only when the legal corpus is ingested. Normal legal
+questions use the second workflow and search the existing Pinecone index. The
+third workflow analyzes a user-uploaded document for the current request and
+does not add it to Pinecone.
 
-The output includes:
+## RAG methodology
 
-- The generated answer.
-- Retrieved source filenames.
-- Page numbers.
-- Retrieval scores.
+### Ingestion
 
-### FastAPI backend
+1. Discover PDFs under `data/raw/`.
+2. Extract text page by page with PyMuPDF.
+3. Normalize whitespace while preserving page metadata.
+4. Split page text into overlapping chunks.
+5. Generate normalized 384-dimensional embeddings with
+   `sentence-transformers/all-MiniLM-L6-v2`.
+6. Store vectors and source metadata in a cosine-similarity Pinecone index.
 
-Start the API:
+### Query answering
 
-```bash
-uvicorn src.app:app --reload
-```
+1. Validate the question and determine the requested answer language.
+2. Translate Malayalam questions to English for retrieval; English questions
+   are used unchanged.
+3. Embed the retrieval query with the same MiniLM model used during ingestion.
+4. Retrieve the configured number of passages from Pinecone.
+5. Construct a prompt containing the original question and retrieved evidence.
+6. Generate a plain-language answer with Gemini.
+7. Display the relevant source documents and pages separately in the UI.
 
-Send a POST request to `/ask`:
+### Uploaded documents
 
-```json
-{
-  "question": "What is a contract?",
-  "top_k": 5
-}
-```
+The backend extracts page-labelled text from an uploaded PDF. Without a
+question, Gemini returns a structured summary. With a question, Gemini answers
+using only the uploaded document. Uploaded PDFs are not inserted into the
+permanent Pinecone index.
 
-Example:
+## Legal corpus
 
-```bash
-curl -X POST http://127.0.0.1:8000/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question":"What is a contract?","top_k":5}'
-```
+| Repository file | Legal document |
+|---|---|
+| `bns.pdf` | Bharatiya Nyaya Sanhita, 2023 |
+| `bnss.pdf` | Bharatiya Nagarik Suraksha Sanhita, 2023 |
+| `bsa.pdf` | Bharatiya Sakshya Adhiniyam, 2023 |
+| `cpa.pdf` | Consumer Protection Act, 2019 |
+| `contract.pdf` | Indian Contract Act, 1872 |
+| `rta.pdf` | Right to Information Act, 2005 source file |
+| `constitution.pdf` | Constitution of India |
 
-The API request's `top_k` field defaults to 5 when omitted.
+The effective query corpus depends on which records have been ingested into the
+configured Pinecone index. Official source references are recorded in
+[data/SOURCES.md](data/SOURCES.md).
 
-The root GET endpoint `/` returns a basic API-running message. The question-answering endpoint is `/ask`.
+## `src/rag.py` function reference
 
-## 6. Evaluation
+| Function | Responsibility |
+|---|---|
+| `embedder()` | Lazily loads and reuses the configured Sentence Transformer model so it is not loaded for every request. |
+| `gemini_client()` | Lazily creates and reuses the Gemini client from the local environment configuration. |
+| `contains_malayalam(text)` | Detects whether the input contains any character from the Malayalam Unicode block. |
+| `determine_response_language(question, requested_language)` | Validates `auto`, `english`, or `malayalam`; explicit choices win, while `auto` follows the question language. |
+| `translate_query_to_english(question)` | Returns English questions unchanged and asks Gemini to translate Malayalam legal queries without answering them. |
+| `pinecone_index()` | Lazily connects to and reuses the configured Pinecone index. |
+| `extract_pdf(path)` | Extracts non-empty PDF text page by page and preserves numeric page metadata for ingestion. |
+| `clean_text(text)` | Normalizes whitespace, removes empty lines, and returns cleaner text for chunking. |
+| `chunk_text(text, chunk_size, overlap)` | Splits text into overlapping word chunks and ignores a final fragment shorter than 40 words. |
+| `document_name(filename)` | Maps known PDF filenames to readable legal-document titles and derives a title for unknown filenames. |
+| `build_chunks()` | Runs extraction, cleaning, and chunking for every PDF in `data/raw/`, then adds vector IDs and source metadata. |
+| `generate_embeddings(texts)` | Encodes all chunk texts in batches, normalizes the vectors, and converts them to lists for Pinecone. |
+| `ingest()` | Orchestrates corpus preparation, embedding generation, and batched Pinecone upserts. |
+| `retrieve(question, top_k)` | Embeds a query, performs Pinecone similarity search, and returns text, metadata, and numeric similarity scores. |
+| `answer(question, top_k, output_language)` | Runs the complete RAG question-answering path: language handling, translation, retrieval, context construction, Gemini generation, and source return. |
+| `extract_document_text(file_path)` | Extracts an uploaded PDF into one string with explicit page labels such as `--- Page 3 ---`. |
+| `answer_uploaded_document_question(document_text, question, output_language)` | Standalone helper that answers a question using only supplied document text. The active API route uses `analyze_document()` for the combined workflow. |
+| `analyze_document(text, question, output_language)` | Handles both upload modes: document-only structured summary and document-plus-question answering, including retries for temporary Gemini `503` errors. |
 
-Run:
+## Main interfaces
 
-```bash
-python src/evaluate.py
-```
+### Frontend
 
-The current evaluation uses a small set of retrieval questions and reports retrieval latency.
+The React interface supports typed or dictated questions, PDF attachment,
+response-language selection, retrieval-depth selection, source visibility, and
+conversational rendering of answers and document summaries.
 
-It does not establish answer correctness or legal accuracy. Expand the test set and compare generated answers against source documents before reporting performance results.
+### FastAPI
 
-Results for this implementation must be measured independently; the referenced paper's accuracy figures are not results for this repository.
+- `GET /` serves the production frontend.
+- `GET /api/health` checks backend availability without calling an AI service.
+- `POST /ask` accepts a question, retrieval depth, and output language.
+- `POST /analyze-document` accepts a PDF plus an optional question and output
+  language.
+- `GET /docs` exposes interactive API documentation while the server runs.
 
-## Methodology
+## Technology used
 
-### Query pipeline
+- **Backend:** Python 3.12, FastAPI, Uvicorn, PyMuPDF
+- **Retrieval:** Sentence Transformers, Pinecone cosine search
+- **Generation and translation:** Google Gemini
+- **Frontend:** React 19, Vite 8, Tailwind CSS 4, React Markdown
 
-```text
-User question
-→ SentenceTransformer query embedding
-→ Semantic retrieval from Pinecone
-→ Context construction from retrieved passages
-→ Gemini answer generation
-→ Answer and sources
-```
+## Evaluation and verification
 
-### Ingestion pipeline
+`src/evaluate.py` contains representative retrieval questions for the RTI Act,
+Indian Contract Act, BNS, BSA, and BNSS. It reports top-five document hits and
+retrieval latency. The configured Pinecone index must be populated before this
+evaluation is run.
 
-```text
-Local legal PDFs
-→ Text extraction and cleaning
-→ Overlapping chunks
-→ SentenceTransformer embeddings
-→ Pinecone vectors and metadata
-```
+Implementation verification completed during development:
 
-## Project structure
+- Python modules compile successfully.
+- FastAPI serves the React production build and health route.
+- PDF validation rejects unsupported or empty uploads.
+- ESLint passes.
+- The Vite production build completes successfully.
+- Python dependency consistency passes with `pip check`.
 
-```text
-README.md          Project overview and usage
-requirements.txt   Python dependencies
-.env.example       Environment template requiring Gemini updates
-data/SOURCES.md    Legal document source references
-src/rag.py         Core ingestion, retrieval, and generation logic
-src/ingest.py      Ingestion entry point
-src/query.py       Interactive terminal interface
-src/app.py         FastAPI backend
-src/evaluate.py    Small retrieval evaluation
-```
-
-## Relationship to the referenced paper
-
-The original README describes this project as a reproduction of the core RAG pipeline from *AI-Based Legal Assistant for Indian Legal Awareness* (2026).
-
-According to that README, the paper uses Pinecone for vector storage and Groq-based models for generation. This implementation uses **Gemini** for answer generation.
-
-The project retains the central workflow of semantic retrieval followed by context-based generation.
+Generated legal answers still require qualitative review for factual support,
+correct document scope, preservation of exceptions, and page-level source
+alignment.
 
 ## Deviations from the paper
 
-- This implementation uses Gemini as its answer-generation provider.
-- The original README notes that the paper does not provide a complete reproducible configuration covering corpus, embedding model, chunk size, prompt, and retrieval settings. Record the configuration used when evaluating this implementation.
-- The React/Tailwind UI, voice/TTS, multilingual interaction, Supabase authentication, and document-summary modules described in the original README remain optional extensions. They are not verified features of this backend.
-- Evaluation uses a small retrieval test set. It does not reproduce or establish the paper's reported 85–88% accuracy.
+- FastAPI is used instead of Flask.
+- Gemini performs query translation, grounded generation, and uploaded-document
+  analysis.
+- Sentence Transformers and Pinecone implement retrieval.
+- Uploaded documents are analyzed for the current request instead of being
+  inserted into the permanent vector index.
+- Internal retrieval labels are used to identify supporting passages but are
+  removed from the displayed answer; users see document names and page numbers.
+- Browser-native speech recognition provides voice input without an additional
+  backend audio service.
 
-## Current limitations
+## Limitations
 
-- The embedding model must match the model used for the existing Pinecone vectors.
-- The index dimension must match the embedding model's output.
-- The tracked `.env.example` still needs Gemini configuration updates.
-- The code's fallback embedding identifier is inconsistent with the SentenceTransformer implementation; configure a compatible model explicitly.
-- Dependency installation and Python-version compatibility have not been verified as part of this documentation update.
-- The repository contains a backend and terminal interface; no frontend is currently tracked.
-- Retrieved sources do not guarantee that an answer is correct or complete.
+- Retrieval quality depends on PDF extraction, chunk boundaries, and the
+  records actually stored in Pinecone.
+- Word-based chunks can rank an exact provision below related passages;
+  section-aware chunking and reranking would improve retrieval.
+- Image-only PDFs require OCR, which is not currently implemented.
+- Malayalam retrieval depends on machine translation and may lose legal nuance.
+- Speech-recognition availability and quality vary by browser and device.
+- Broad questions may require legislation or case law outside the indexed
+  corpus.
+- Gemini may temporarily return provider-capacity errors such as `503`.
 
-## Safety / legal disclaimer
+## Setup
 
-This is a research and evaluation prototype, not a substitute for professional legal advice.
-
-Check generated answers against the original source documents and current applicable law.
-
-The application returns source filenames and page numbers to support verification. These should not be treated as verified Act or section citations without checking the underlying document.
+See [SETUP.md](SETUP.md) for cross-platform installation, environment
+configuration, and startup commands.
