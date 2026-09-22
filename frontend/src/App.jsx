@@ -12,6 +12,7 @@ const id = () => crypto.randomUUID();
 
 export default function App() {
   const [messages, setMessages] = useState([]);
+  const [conversationHistory, setConversationHistory] = useState([]);
   const [draft, setDraft] = useState("");
   const [file, setFile] = useState(null);
   const [language, setLanguage] = useState("auto");
@@ -29,7 +30,7 @@ export default function App() {
 
   function reset() {
     if (busy) return;
-    setMessages([]); setDraft(""); setFile(null); setLanguage("auto"); setSidebarOpen(false);
+    setMessages([]); setConversationHistory([]); setDraft(""); setFile(null); setLanguage("auto"); setSidebarOpen(false);
   }
 
   async function submit(event) {
@@ -39,8 +40,11 @@ export default function App() {
     const activeFile = file;
     if (!question && !activeFile) return;
     const loadingId = id();
+    // Preserve the request values above, then immediately reset the composer for the next prompt.
+    setDraft("");
+    setFile(null);
     setMessages((current) => [...current,
-      { id: id(), role: "user", label: "You", text: question || "Summarize this legal document.", fileName: activeFile?.name },
+      { id: id(), role: "user", label: "You", text: question || "Summarize this legal document.", content: question || "Summarize this legal document.", fileName: activeFile?.name },
       { id: loadingId, role: "assistant", label: activeFile ? (question ? "Reviewing the document" : "Preparing document summary") : "Searching legal sources", loading: true },
     ]);
     setBusy(true);
@@ -54,10 +58,11 @@ export default function App() {
           : { id: id(), role: "assistant", label: "Document summary", summary: analysis.summary || analysis };
         setMessages((current) => [...current.filter((item) => item.id !== loadingId), reply]);
       } else {
-        const result = await askKnowledgeBase(question, language, topK);
-        setMessages((current) => [...current.filter((item) => item.id !== loadingId), { id: id(), role: "assistant", label: "Legal assistant", text: result.answer || "No answer was returned.", sources: result.sources || [] }]);
+        const result = await askKnowledgeBase(question, language, topK, conversationHistory);
+        const answer = result.answer || "No answer was returned.";
+        setMessages((current) => [...current.filter((item) => item.id !== loadingId), { id: id(), role: "assistant", label: "Legal assistant", text: answer, content: answer, sources: result.sources || [] }]);
+        setConversationHistory((current) => [...current, { role: "user", content: question }, { role: "assistant", content: answer }].slice(-8));
       }
-      setDraft(""); setFile(null);
     } catch (error) {
       setMessages((current) => [...current.filter((item) => item.id !== loadingId), { id: id(), role: "error", label: "Request could not be completed", text: error instanceof Error ? error.message : "An unexpected error occurred." }]);
     } finally { setBusy(false); }

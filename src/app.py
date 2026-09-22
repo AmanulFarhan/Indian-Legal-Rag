@@ -1,13 +1,14 @@
 import os
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .rag import answer, extract_document_text, analyze_document
+from .rag import answer, extract_document_text, analyze_document, pipeline_log
 
 app = FastAPI(
     title="Indian Legal AI Assistant",
@@ -25,10 +26,19 @@ app.mount(
 )
 
 
+class ConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+
+
 class QuestionRequest(BaseModel):
     question: str
     top_k: int = 5
     output_language: str = "auto"
+    conversation_history: list[ConversationMessage] = Field(
+        default_factory=list,
+        max_length=20
+    )
 
 
 
@@ -45,10 +55,12 @@ def health_check():
 @app.post("/ask")
 def ask_question(request: QuestionRequest):
     try:
+        pipeline_log("API", f"Received /ask request with {len(request.conversation_history)} history message(s)")
         return answer(
             question=request.question,
             top_k=request.top_k,
-            output_language=request.output_language
+            output_language=request.output_language,
+            conversation_history=[message.model_dump() for message in request.conversation_history]
         )
 
     except ValueError as error:
@@ -90,6 +102,8 @@ async def analyze_uploaded_document(
             detail="The PDF must be smaller than 50 MB."
         )
 
+    pipeline_log("API", f"Received PDF upload: {file.filename} ({len(contents)} bytes)")
+
     with tempfile.NamedTemporaryFile(
         delete=False,
         suffix=".pdf"
@@ -98,6 +112,7 @@ async def analyze_uploaded_document(
         temp_path = temp.name
 
     try:
+        pipeline_log("API", "Created temporary upload file; starting document analysis")
         text = extract_document_text(temp_path)
 
         if not text.strip():
@@ -112,6 +127,7 @@ async def analyze_uploaded_document(
             output_language=output_language
         )
 
+        pipeline_log("API", "Document analysis request completed successfully")
         return {
             "filename": file.filename,
             "analysis": analysis
@@ -135,3 +151,4 @@ async def analyze_uploaded_document(
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+            pipeline_log("API", "Removed temporary upload file")

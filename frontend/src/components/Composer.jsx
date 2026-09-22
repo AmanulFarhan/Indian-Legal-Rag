@@ -35,6 +35,10 @@ export default function Composer({
   }, [draft]);
 
   useEffect(() => {
+    if (!file && fileRef.current) fileRef.current.value = "";
+  }, [file]);
+
+  useEffect(() => {
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.onend = null;
